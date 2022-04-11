@@ -1,0 +1,708 @@
+---
+title: "Time Series Project"
+author: "Mihir"
+date: "3/15/2022"
+output:
+  rmdformats::downcute:
+   default_style: "dark"
+   downcute_theme: "chaos"
+   self_contained: true
+   thumbnails: false
+   lightbox: true
+   gallery: true
+   embed_fonts: true
+   use_bookdown: true
+   highlight: breezedark
+  toc: true
+  toc_float: true
+  toc_collapsed: false
+  toc_depth: 3
+  fig_caption: true
+  number_sections: true
+---
+
+# INTRODUCTION
+
+The dataset is obtained from [UCI Machine Learning Repository](https://archive.ics.uci.edu/ml/datasets/Beijing+Multi-Site+Air-Quality+Data#) website. The dataset includes hourly air pollutants data from the 12 nationally-controlled air-quality monitoring sites in China. The air-quality data are from the Beijing Municipal Environmental Monitoring Center. The meteorological data in each air-quality site are matched with the nearest weather station from the China Meteorological Administration. This project deals with data collected from the weather station named **Aotizhongxin**.
+
+Data are recorded at each hour from March 1st, 2013 to February 28th, 2017. The recorded data include concentrations (in ug/m\^3) of fine particulates like `PM2.5`, `PM10`; air pollutants like `SO2`, `NO2`, `CO`, `O3`; and other climate data like `TEMP` (i.e. Temperature in degree Celsius), `PRES` (i.e. pressure in hPA), `DEWP` (i.e. dew point temperature in degree Celsius), `RAIN` (i.e. precipitation in mm), `wd` (i.e. wind direction), `WSPM` (i.e. wind speed (m/s)). Missing data are denoted as NA.
+
+The main purpose of this project is to forecast climate variables and understand the association of air pollutants and other climate variables. This can be of of immense importance where weather drives demand of certain products. Estimation of weather driven demand is significant for projection of Sales and Revenue for coming weeks or months. Such a forecast of climate variables finds application in agricultural industries manufacturing lawn, garden, fertilizers, insecticides, pest control products, etc.
+
+The scope of this project is limited to forecasting of `TEMP` variable. This is a typical time series data and hence, I have decided to use [Facebook's Prophet](https://facebook.github.io/prophet/docs/quick_start.html#r-api) Model to forecast `TEMP` variable. \> Normal Regression strategies like Linear Regression cannot be used here as the order of recorded observations is of importance. Also, for this project, climate variables other than `TEMP` are not considered for forecasting and are used as external regressors for forecasting `TEMP`. However, each of the climate variables is a Time Series in itself.
+
+The project has been divided into the following main components.
+
+1.  Exploratory Data Analyses
+2.  Prophet Model
+3.  Forecast and Inference (Stakeholder Communication)
+
+The **Exploratory Data Analyses** section deals with exploring various variables of interest and understanding their association with the target variable `TEMP`. The main aim is to understand and figure out the data generating process for the target variable `TEMP` and creating a subset of variables that could be added as external regressors.
+
+The **Prophet Model** section includes fitting an improved model involving external regressors. Finally, the improved model will be hyperparemeter tuned for identifying the best model to be used for forecast.
+
+The final section, **Forecast and Inference**, creates forecast and assesses the model performance. It also provides a summary and important inferences, drawn from modelling, to be used for stakeholder communication.
+
+# EXPLORATORY DATA ANALYSES
+
+## Data Loading
+
+```{r , message=FALSE, warning=FALSE}
+
+# importing data stored on my github
+df <- read.csv(file = "https://raw.githubusercontent.com/mpleo17/Project/main/PRSA_Data_Aotizhongxin_20130301-20170228.csv", sep = ",", header = TRUE)
+
+#looking at first 5 observations
+head(df, 5)
+
+```
+
+## Data Wrangling
+
+From the above few observations, we can see that `year`, `month`, `day` and `hour` are in separate columns. We can create a date-time stamp to make our case easy. Also, we would convert `TEMP` from degree Celsisus to Fahrenheit and rename it to `TEMP_abs`. Finally, we drop the non-important variables like `No`, `year`, `month`, `day`, `hour`, etc. and look at the summary of resultant dataframe.
+
+```{r, message=FALSE, warning=FALSE}
+
+library(tidyverse) # for playing with data,dataframes and more
+library(lubridate) # for playing with dates
+
+# uniting the date, month and year into a single column - date
+df <- df %>%
+  mutate(date = make_datetime(year, month, day, hour))
+
+#converting degree Celsius to kelvin
+df <- df %>% dplyr::mutate(df, TEMP_abs = TEMP + 273.15)
+
+# creating required dataframe
+df <- df %>% dplyr::select(date, PM2.5, PM10, SO2, NO2, CO, O3, TEMP_abs, PRES, DEWP, RAIN, wd, WSPM, station)
+
+# converting to datetime object
+df[['date']] <- as.POSIXct(df[['date']],format = "%Y-%m-%d %H")
+
+# summary
+summary(df) # NA columns: PM2.5 + PM10 + SO2 + NO2 + CO + O3 + TEMP_abs + PRES + DEWP + RAIN + WSPM
+
+```
+
+Variables `PM2.5`, `PM10`, `SO2`, `NO2`, `CO`, `O3`, `TEMP_abs`, `PRES`, `DEWP`, `RAIN` and `WSPM` have missing values. Let us calculate the percentage of missing values and then decide on how to deal with them.
+
+```{r , message=FALSE, warning=FALSE }
+# proportion of NA values for these columns
+attach(df) # attaching to avoid mentioning df$var everytime
+
+col1 = c() 
+col2 = c()
+col3 = c()
+
+#loop 
+for (i in (1:dim(df)[2])){
+  col1[i] = colnames(df)[i]
+  col2[i] =  sum(is.na(df[i]))
+  col3[i] = round(col2[i]/dim(df)[1],4)
+}
+
+#creating dataframe for compiling NA values 
+(df_NA <- tibble("Column" = col1, "NA_values" = col2, "NA_proportion" = col3))
+
+```
+
+Let us now observe the missingness pattern before dealing with the missing values.
+
+```{r , message=FALSE, warning=FALSE, fig.cap = "Plot indicating missingness pattern for variables. The red dots indicate missing values and blue dots indicate non missing values."}
+
+library(naniar) # for missing points
+library(ggpubr) #for dealing with multiple ggplots
+
+#generating plots for variables having missing values
+P1 <- ggplot(df,aes(y = PM2.5, x = date)) + geom_miss_point() +
+  geom_vline(aes(xintercept=df[round(dim(df)[1]*0.8),1]),color='red')
+P2 <- ggplot(df,aes(y = PM10, x = date)) + geom_miss_point() +
+  geom_vline(aes(xintercept=df[round(dim(df)[1]*0.8),1]),color='red')
+P3 <- ggplot(df,aes(y = SO2, x = date)) + geom_miss_point() +
+  geom_vline(aes(xintercept=df[round(dim(df)[1]*0.8),1]),color='red')
+P4 <- ggplot(df,aes(y = NO2, x = date)) + geom_miss_point()+
+  geom_vline(aes(xintercept=df[round(dim(df)[1]*0.8),1]),color='red')
+P5 <- ggplot(df,aes(y = CO, x = date)) + geom_miss_point()+ 
+  geom_vline(aes(xintercept=df[round(dim(df)[1]*0.8),1]),color='red')
+P6 <- ggplot(df,aes(y = O3, x = date)) + geom_miss_point()+
+  geom_vline(aes(xintercept=df[round(dim(df)[1]*0.8),1]),color='red')
+P7 <- ggplot(df,aes(y = TEMP_abs, x = date)) + geom_miss_point()+
+  geom_vline(aes(xintercept=df[round(dim(df)[1]*0.8),1]),color='red')
+P8 <- ggplot(df,aes(y = PRES, x = date)) + geom_miss_point()+
+  geom_vline(aes(xintercept=df[round(dim(df)[1]*0.8),1]),color='red')
+P9 <- ggplot(df,aes(y = DEWP, x = date)) + geom_miss_point()+
+  geom_vline(aes(xintercept=df[round(dim(df)[1]*0.8),1]),color='red')
+P10 <- ggplot(df,aes(y = RAIN, x = date)) + geom_miss_point()+
+  geom_vline(aes(xintercept=df[round(dim(df)[1]*0.8),1]),color='red')
+P11 <- ggplot(df,aes(y = WSPM, x = date)) + geom_miss_point()+
+  geom_vline(aes(xintercept=df[round(dim(df)[1]*0.8),1]),color='red')
+
+# 11 figures arranged in 4 rows and 3 columns
+annotate_figure(ggarrange(P1, P2, P3, P4, P5, P6, P7, P8, P9, P10, P11, 
+                          ncol = 3, nrow = 4),
+                top=text_grob("Missingness Pattern in Variables"))
+```
+
+Since the proportion of missing values is very small (max \~ 2.9 %) and the data are missing completely at random, we will proceed with filling in of missing values using spline interpolation. There are many methods available to fill in the missing values, however, we shall use spline interpolation for this project.
+
+```{r, message=FALSE, warning=FALSE}
+library(zoo)# for spline interpolation
+
+# Missing values using spline interpolation. Here 2,3...indicate column index
+for (i in c(2,3,4,5,6,7,8,9,10,11,13)){
+ df[i] <- na.spline(df[i]) 
+}
+
+# creating train-test split with split having exactly 60 days
+train <- df %>% slice(1:(dim(df)[1] - (60*24)))  # train having the rest
+test <- df %>% slice((dim(df)[1] - (60*24)) + 1:dim(df)[1]) # test having last 60 days
+```
+
+The train and test split have been made and solely train data shall be used for model building. Final model shall be run only on test data. Forecast results and performance will be calculated on test data and will be communicated with the stake-holders.
+
+## ANALYZING `TEMP_abs`
+
+```{r, message=FALSE, warning=FALSE, fig.cap = "Time Series of TEMP_abs from 2013-03-01 00:00:00 to 2017-02-28 23:00:00. The data was recorded every hour."}
+
+# visualizing `TEMP_abs` time series
+library(xts)
+library(dygraphs)
+
+data <- xts(train$TEMP_abs , order.by = train$date)
+
+dygraph(data = data , main = "Time Series of TEMP_abs") %>%
+  dyAxis("y", label = "Temp in Kelvin", valueRange = c(250,320)) %>% dyAxis("x", label = "Date-Time") %>% 
+  dyRangeSelector(height = 20) %>% dyLegend(show = "follow")
+
+```
+
+The time series seems to have a seasonality at yearly level. Let us look at following plots to better understand the observed seasonalities.
+
+```{r , message=FALSE, warning=FALSE, fig.cap = "This plot indicates seasonal variation at daily level." }
+
+#grouping by hour for daily effect
+data <- train %>% dplyr::select(date,TEMP_abs) %>% 
+  mutate(hour = hour(date)) %>%
+  group_by(hour) %>%
+  summarise(avg_TEMP_abs = mean(TEMP_abs)) 
+
+dygraph(data = data , main = "Hour of the Day effect") %>%
+  dyAxis("y", label = "Temp in Kelvin", valueRange = c(283,293)) %>% 
+  dyAxis("x", label = "Hours in a Day", valueRange = c(1,24)) %>% 
+  dyRangeSelector(height = 20) %>% dyLegend(show = "follow")
+
+```
+
+The time series is grouped at hour level for all the days in this dataset. Thus, we can observe, on an average, seasonal pattern of `TEMP_abs` at daily level. It logically agrees with the fact that temperature rises as tje Sun rises and lowers as the Sun sets. Thus, this seasonal pattern on a daily basis is due to the rotation of the Earth. Hence, the rotation of the Earth impacts the `TEMP_abs` and forms a part of data generating process.
+
+```{r, message=FALSE, warning=FALSE, fig.cap = "This plot indicates variation (hardly any) at weekly level with 1 as Sunday."}
+
+# grouping by days for weekly effect
+data <- train %>% dplyr::select(date,TEMP_abs) %>% 
+  mutate(day = format(as.POSIXct(date,format = '%Y-%m-%d %H:%M:%S'),format = '%Y%m%d')) %>%
+  group_by(day_of_week = wday(ymd(day)), label = FALSE) %>%
+  summarise(avg_TEMP_abs = mean(TEMP_abs)) 
+
+dygraph(data = data , main = "Day of the Week effect") %>%
+  dyAxis("y", label = "Temp in Kelvin", valueRange = c(286,289)) %>% 
+  dyAxis("x", label = "Days in a Week",valueRange = c(1,7)) %>% 
+  dyRangeSelector(height = 20) %>% dyLegend(show = "follow")
+
+```
+
+The time series is grouped at day of week level to observe any patterns at week level. Looking at the plot, we can infer that there is hardly any evidence that supports minimal change in `TEMP_abs` for different days of the week. Thus, we can safely assume that there is hardly any seasonality at weekly level.
+
+```{r, message=FALSE, warning=FALSE, fig.cap = "This plot indicates seasonal variation at yearly level." }
+
+# grouping by month to see yearly effect
+data <- train %>% select(date,TEMP_abs) %>% 
+  mutate(month = month(date)) %>%
+  group_by(month) %>%
+  summarise(avg_TEMP_abs = mean(TEMP_abs)) 
+
+dygraph(data = data , main = "Month of the Year effect") %>%
+  dyAxis("y", label = "Temp in Kelvin") %>% dyAxis("x", label = "Months in a Year", valueRange = c(1,12)) %>% dyRangeSelector(height = 20) %>% dyLegend(show = "follow")
+
+```
+
+The time series is grouped at month of the year level to observe any noticeable pattern at yearly level. This plot indicates the presence of yearly seasonality. This can also be confirmed from the raw time series plot above. Logically, this is coherent with the fact that temperatures are usually the highest during the summer season, gradually reduce till the winter season and then rise again. This can be attributed to the revolution of the Earth around the Sun and it takes a year to revolve. Thus, this revolution influences the temperature and could be a potential part of the data generating process. This explains yearly seasonality for `TEMP_abs`.
+
+> Rotation and revolution of the Earth are two of the most important factors affecting the temperature values.
+>
+> Hence, they form an integral part of the data generating process.
+
+## Analyzing association of rest of the variables with `TEMP_abs`
+
+For simplicity and a high level view of linear association, a correlation plot is made. To dive in deep, with an aim to observe almost independent effect of each variable on `Temp_abs`, a random forest model are fit between `TEMP_abs` and rest of the variables. Variable Importance plots are created for the Random Forest model. This plot shows us the relative importance of variables with `TEMP_abs`. A small subset of important variables is selected and their nature of association with `TEMP_abs` could be observed using partial dependence plots(not shown).
+
+### Pearsons' correlation
+
+```{r, message=FALSE, warning=FALSE, fig.cap = "Pearson Correlation plot"}
+
+library(ggcorrplot) #for plotting correlations
+#calculating and plotting correlation 
+corr <- cor(df %>% select(TEMP_abs, PM2.5, PM10, SO2, NO2, CO, O3, PRES, DEWP, RAIN, WSPM))
+ggcorrplot(corr , hc.order = TRUE, method = "circle")
+
+```
+
+TEMP_abs shows positive correlation with O3, DEWP and negatively with PRES.
+
+### Random Forest
+
+Regression trees can be powerful tools for EDA. Let us fit a Random Forest model and select a subset of variables from the generated Variable Importance by Random Forest.
+
+```{r, warning=FALSE, message = FALSE, cache = TRUE, fig.cap = "Variable Importance Plot generated by Random Forest fit"}
+
+#partial dependence plot approach
+library(randomForest) # for randomForest, partialPlot, and varImpPlot functions
+
+set.seed(100) # for reproducibility
+
+train.rf <- randomForest(TEMP_abs ~ PM2.5 + PM10 + SO2 + NO2 + CO + O3 + PRES + DEWP + RAIN + WSPM , data = train, importance = TRUE)
+
+#plotting relative importance of variables
+varImpPlot(train.rf)
+```
+
+Looking at the above variable importance plots, O3, DEWP, PRES along with WSPM seem to be significant predictor variables having strong association with TEMP_abs.
+
+> The Correlation plot, Variable Importance plot from Random Forest model indicate that DEWP, PRES, O3 and WSPM show maximum levels of association with TEMP_abs.
+>
+> Thus, for the models where external regressors can be included (such as Prophet model), DEWP, PRES, O3 and WSPM shall form a part of external regressors.
+
+# PROPHET MODEL
+
+Prophet model is a univariate forecasting technique developed by Facebook. It breaks down a univariate time series into the following components:
+
+1.  Trend
+2.  Seasonality
+3.  Holidays/ External Regressors
+4.  Residuals that cannot be mapped by the above components
+
+Considering the default case of additive seasonality, which is our case too, the following is the equation for the Time series, in our case: `TEMP_abs`.
+
+$$Time Series = Trend + Seasonality + ExternalRegressors + Residuals$$
+
+## Prophet data preparation
+
+For avoiding computational complexity, I am aggregating hourly level data to daily data. Hence, daily seasonality will be of no use, however, yearly seasonality will still be present.
+
+```{r, warning=FALSE, message=FALSE}
+
+# aggregating data at daily level
+train_day <- train %>%  
+  mutate(date = date(date)) %>%
+  group_by(date) %>%
+  summarise(PM2.5 = mean(PM2.5),
+            PM10 = mean(PM10),
+            SO2 = mean(SO2),
+            NO2 = mean(NO2),
+            CO = mean(CO),
+            O3 = mean(O3),
+            TEMP_abs = mean(TEMP_abs),
+            PRES = mean(PRES),
+            DEWP = mean(DEWP),
+            RAIN = mean(RAIN),
+            WSPM = mean(WSPM))
+
+test_day <- test %>%  
+  mutate(date = date(date)) %>%
+  group_by(date) %>%
+  summarise(PM2.5 = mean(PM2.5),
+            PM10 = mean(PM10),
+            SO2 = mean(SO2),
+            NO2 = mean(NO2),
+            CO = mean(CO),
+            O3 = mean(O3),
+            TEMP_abs = mean(TEMP_abs),
+            PRES = mean(PRES),
+            DEWP = mean(DEWP),
+            RAIN = mean(RAIN),
+            WSPM = mean(WSPM))
+
+# creating prophet train and train_validation sets
+prophet_train <- train_day[1:(nrow(train_day) - 60),] %>%
+  rename(ds = date, y = TEMP_abs)
+prophet_train_val <- train_day[(nrow(train_day) - 60 + 1):nrow(train_day),] %>%
+  rename(ds = date, y = TEMP_abs)
+
+# prophet test set
+prophet_test <- test_day %>%
+  rename(ds = date, y = TEMP_abs)
+```
+
+## Initial improved model fitting
+
+Let us begin and fit a prophet model. The explanation of values of parameters are shown in form of comments in the code below.
+
+1.  **Trend** : Real time series frequently have abrupt changes in their trajectories. By default, Prophet will automatically detect these changepoints and will allow the trend to adapt appropriately. The number of changepoints has been increased to 40 (might overfit). An attempt to manually add changepoint dates was made, but it didn't improve the model significantly. Hence, I stuck myself to 40 changepoint number.
+
+2.  **Seasonality**: This is the part which repeats itself after a particular calendar time period. The seasonality mode is set to additive for Yearly seasonality with default fourier order.
+
+3.  **External Regressors**: `WSPM`, `DEWP`, `O3` and `PRES` have been added as external regressors. Future values of these regressors have also been added to the created future dataframe.
+
+```{r, message=FALSE, warning=FALSE}
+
+# library for prophet model
+library(prophet)
+
+#creating an improved prophet model
+im <- (prophet(
+df = NULL,   # Dataframe containing the history
+growth = "linear",    # trend change/growth can't be logistic or flat for this TS
+#changepoints = c('2013-08-10','2014-01-10', '2014-08-02', '2015-01-13', '2015-07-13',	
+#'2016-01-22', '2016-08-04'), 
+n.changepoints = 40, #more than default, might overfit 
+changepoint.range = 0.80, # Proportion of history in which trend changepoints will be estimated
+yearly.seasonality = TRUE, # Default Fourier Order
+weekly.seasonality = FALSE, # no evidence for temp change for days of a week
+daily.seasonality = FALSE, # Daily seasonality locked as off as data is daily leveled
+holidays = NULL, # no evidence that holidays affect temp 
+seasonality.mode = "additive", # by observation
+seasonality.prior.scale = 10, # default
+holidays.prior.scale = 10, # default for regressors too
+changepoint.prior.scale = 0.05, # default
+mcmc.samples = 0, # default
+interval.width = 0.80, #default
+uncertainty.samples = 1000, #default
+fit = TRUE
+))
+
+# adding external regressors
+im = add_regressor(im,'WSPM',standardize = FALSE) # added WSPM as an external regressor
+im = add_regressor(im,'DEWP', standardize = FALSE) # added DEWP as an external regressor
+im = add_regressor(im,'O3', standardize = FALSE) # added O3 as an external regressor
+im = add_regressor(im,'PRES', standardize = FALSE) # added PRES as an external regressor
+
+# fitting a prophet model
+im = fit.prophet(im, df = prophet_train)
+
+#making future dataframes
+future_im <- make_future_dataframe(im, periods = 60, 
+                                   freq = "day", include_history = TRUE) #predictions for two months
+
+future_im$WSPM = head(train_day$WSPM ,nrow(future_im))
+future_im$DEWP = head(train_day$DEWP ,nrow(future_im))
+future_im$O3 = head(train_day$O3, nrow(future_im))
+future_im$PRES = head(train_day$PRES, nrow(future_im))
+```
+
+Once the model has been fitted and future dataframe has been created, we can now proceed to forecasting.
+
+Prediction of `TEMP_abs` has been made for 60 days. The forecast gives us the dates and its corresponding point estimation along with upper and lower values of `TEMP_abs`. The fitted vales and forecast can be visually seen too. A plot indicating components has also been created.
+
+```{r, fig.cap = "Interactive plot indicating fit on prophet_train data and showing forecast", warning= FALSE, message=FALSE}
+# prediction
+fcst_im <- predict(im,future_im) # creating forecast for 60 days
+#tail(fcst_im[c('ds', 'yhat', 'yhat_lower', 'yhat_upper')]) #observing tail observations
+dyplot.prophet(im,fcst_im , uncertainty = TRUE) # creating interactive plots for the forecast
+```
+
+```{r, fig.cap = "A ggplot indicating components of the Time series as per Prophet model fit", warning= FALSE, message=FALSE}
+
+# plotting components of the forecast
+prophet_plot_components(
+im,
+fcst_im,
+uncertainty = TRUE,
+plot_cap = TRUE,
+yearly_start = 0,
+render_plot = TRUE
+)
+
+```
+
+It can be seen from the first plot that *trend* increases from 2013 to mid 2014 and then decreases for almost a year till mid 2015. There is a rise till 2016 and then it remains constant henceforth. The second plot shows the *seasonal* component. This means that the seasonal graph repeats itself after a period of one year. The third plot can be roughly understood as variation explained by *external regressors*. The remaining unexplained part forms a part of *residuals*.
+
+The addition of the above three components along with the residuals would sum up to the fit created by prophet model .
+
+Let us now look at the model performance. The assessment is done on the validation set of the train data. **RMSE**, **MAE**, and **MAPE** are the metrics used to assess the model.
+
+```{r, fig.cap = "Performance metrics for validation set", warning= FALSE, message=FALSE}
+
+# out of sample (validation set) assessment
+RMSE_im = sqrt(mean((tail(train_day$TEMP_abs,60) - tail(fcst_im$yhat,60))^2))
+MAE_im = mean(abs( tail(train_day$TEMP_abs,60) - tail(fcst_im$yhat,60) ))
+MAPE_im = mean(abs(  (tail(train_day$TEMP_abs,60) - tail(fcst_im$yhat,60))  / tail(train_day$TEMP_abs,60) ))
+
+tibble("RMSE"= c(round(RMSE_im,4)), "MAE" = round(MAE_im,4), "MAPE" = round(MAPE_im,4))
+
+```
+
+## Hyperparameter Tuning
+
+Fitting a prophet model is easy and that was the intention behind development of the model for usage by non-experts. However, it is extremely important to tune the parameters before deploying the model. The paramters to be tuned here include:
+
+1.  **changepoint_prior_scale**: It determines the flexibility of the trend, and in particular how much the trend changes at the trend changepoints. As described in this [documentation](https://facebook.github.io/prophet/docs/diagnostics.html#cross-validation), if it is too small, the trend will be underfit and variance that should have been modeled with trend changes will instead end up being handled with the noise term. If it is too large, the trend will overfit and in the most extreme case you can end up with the trend capturing yearly seasonality. The default, 0.05, works for many time series.
+
+2.  **seasonality_prior_scale** (for yearly seasonality): This parameter controls the flexibility of the seasonality. Similarly, a large value allows the seasonality to fit large fluctuations, a small value shrinks the magnitude of the seasonality. The default is 10, which applies basically no regularization.
+
+3.  **fourier_order_yearly**: Seasonalities are estimated using a partial Fourier sum. The number of terms in the partial sum (the order) is a parameter that determines how quickly the seasonality can change. The default Fourier order for yearly seasonality is 10.
+
+4.  **holiday_prior_scale**: The scale of external regressors is the same as this scale. Since we are not adding the effect of holiday in this project, this scale will control the dampening effect of external regressors.
+
+The codes below provide a subset of values to be chosen for each of the above mentioned parameters. This is usually obtained by playing and fitting the Prophet model and observing the performance.
+
+```{r message=FALSE, warning=FALSE, cache=FALSE}
+
+changepoint_prior_scale <- c(0.01, 0.1, 0.5)
+seasonality_prior_scale <- c(8.0, 10.0, 12.0)
+fourier_order_yearly <- c(10, 12, 17)
+holidays_prior_scale <- c(8, 10)
+
+iter <- expand.grid(changepoint_prior_scale = changepoint_prior_scale,
+                    seasonality_prior_scale = seasonality_prior_scale,
+                    fourier_order_yearly = fourier_order_yearly,
+                    holidays_prior_scale = holidays_prior_scale)
+
+a <- NULL
+b <- NULL
+f <- NULL
+h <- NULL
+c <- NULL
+d <- NULL
+e <- NULL
+ 
+
+for (i in (1:nrow(iter))){
+  im <- NULL # null model
+  #creating an improved prophet model
+  im <- (prophet(
+  df = NULL,   # Dataframe containing the history
+  growth = "linear",    # trend change/growth can't be logistic or flat for this TS
+  n.changepoints = 40, #more than default, might overfit 
+  changepoint.range = 0.80, # Proportion of history in which trend changepoints will be estimated
+  yearly.seasonality = iter$fourier_order_yearly[i], # need to be tuned 
+  weekly.seasonality = FALSE, # no evidence for temp change for days of a week
+  daily.seasonality = FALSE, # Daily seasonality locked as off as data is daily leveled
+  holidays = NULL, # no evidence that holidays affect temp 
+  seasonality.mode = "additive", # by observation
+  holidays.prior.scale = iter$holidays_prior_scale[i], # default
+  seasonality.prior.scale = iter$seasonality_prior_scale[i], # need to be tuned 
+  changepoint.prior.scale = iter$changepoint_prior_scale[i], # need to be tuned 
+  mcmc.samples = 0, # default
+  interval.width = 0.80, #default
+  uncertainty.samples = 1000, #default
+  fit = TRUE
+  ))
+
+  # adding external regressors
+  im = add_regressor(im,'WSPM',standardize = FALSE) # added WSPM as an external regressor
+  im = add_regressor(im,'DEWP', standardize = FALSE) # added DEWP as an external regressor
+  im = add_regressor(im,'O3', standardize = FALSE) # added O3 as an external regressor
+  im = add_regressor(im,'PRES', standardize = FALSE) # added PRES as an external regressor
+
+  # fitting a prophet model
+  im = fit.prophet(im, df = prophet_train)
+  
+  # performing cross validation
+  df.cv <- cross_validation(im, initial = 365*2.4, period = 30, horizon = 60, units = "days")
+  
+  #performance metrics
+  df_p = performance_metrics(df.cv, rolling_window = 1)
+
+  a[i] <- iter$changepoint_prior_scale[i]
+  b[i] <- iter$seasonality_prior_scale[i]
+  f[i] <- iter$fourier_order_yearly[i]
+  h[i] <- iter$holidays_prior_scale[i]
+  c[i] <- df_p$rmse
+  d[i] <- df_p$mae
+  e[i] <- df_p$mape
+}
+
+# summarizing results
+pm <- tibble("changepoint_prior_scale" = a,
+             "seasonality_prior_scale" = b,
+             "fourier_order_yearly" = f,
+             "holidays_prior_scale" = h,
+             "RMSE" = c,
+             "MAE" = d,
+             "MAPE" = e)
+
+# arranging in ascending order of RMSE
+(pm %>% arrange(RMSE))
+```
+
+Looking at the above summary table, we will select the top 10 rows, since they have lower **RMSE** scores, and utilize those parameters' values to calculate out of sample (validation set) performance. The set of good hyperparameter tuned models (top 10 models) is then tested on validation set. This means that we shall select the best model from these top 10 models after looking at their out-of-sample performance on the validation set. This step is important as forecast in future is more related to near data than farther data, and validation data is more near to the test data.
+
+```{r, message=FALSE, warning=FALSE}
+
+# top 10 rows having the best parameter values as per RMSE
+pm1 <- pm %>% arrange(RMSE) %>% slice(1:10) 
+
+# creating null vectors to store values 
+a <- NULL
+b <- NULL
+f <- NULL
+h <- NULL
+c <- NULL
+d <- NULL
+e <- NULL
+
+# loop for out_of_sample (validation) set assessment
+
+for (i in 1:nrow(pm1)){
+  
+  im <- NULL # null model
+  
+  #creating an improved prophet model
+  im <- (prophet(
+  df = NULL,   # Dataframe containing the history
+  growth = "linear",    # trend change/growth can't be logistic or flat for this TS
+  n.changepoints = 40, #more than default, might overfit 
+  changepoint.range = 0.80, # Proportion of history in which trend changepoints will be estimated
+  yearly.seasonality = pm1$fourier_order_yearly[i], # need to be tuned  
+  weekly.seasonality = FALSE, # no evidence for temp change for days of a week
+  daily.seasonality = FALSE, # Daily seasonality locked as off as data is daily leveled
+  holidays = NULL, # no evidence that holidays affect temp 
+  seasonality.mode = "additive", # by observation
+  holidays.prior.scale = pm1$holidays_prior_scale[i], # default
+  seasonality.prior.scale = pm1$seasonality_prior_scale[i], # need to be tuned 
+  changepoint.prior.scale = pm1$changepoint_prior_scale[i], # need to be tuned 
+  mcmc.samples = 0, # default
+  interval.width = 0.80, #default
+  uncertainty.samples = 1000, #default
+  fit = TRUE
+  )) 
+  
+  # adding external regressors
+  im = add_regressor(im,'WSPM',standardize = FALSE) # added WSPM as an external regressor
+  im = add_regressor(im,'DEWP', standardize = FALSE) # added DEWP as an external regressor
+  im = add_regressor(im,'O3', standardize = FALSE) # added O3 as an external regressor
+  im = add_regressor(im,'PRES', standardize = FALSE) # added PRES as an external regressor
+
+  # fitting a prophet model
+  im = fit.prophet(im, df = prophet_train)
+  
+  #making future dataframes
+  future_im <- make_future_dataframe(im, periods = 60, freq = "day", include_history = FALSE) #predictions for    two months
+  future_im$WSPM = prophet_train_val$WSPM
+  future_im$DEWP = prophet_train_val$DEWP
+  future_im$O3 = prophet_train_val$O3
+  future_im$PRES = prophet_train_val$PRES
+  
+  # prediction
+  fcst_im <- predict(im,future_im) # creating forecast for 60 days
+  
+  # out of sample (validation set) assessment
+  RMSE_im = sqrt(mean((prophet_train_val$y - fcst_im$yhat)^2))
+  MAE_im = mean(abs( prophet_train_val$y - fcst_im$yhat ))
+  MAPE_im = mean(abs(  (prophet_train_val$y - fcst_im$yhat)  / prophet_train_val$y ))
+
+  #appending values to vectors
+  a[i] <- pm1$changepoint_prior_scale[i]
+  b[i] <- pm1$seasonality_prior_scale[i]
+  f[i] <- pm1$fourier_order_yearly[i]
+  h[i] <- pm1$holidays_prior_scale[i]
+  c[i] <- RMSE_im
+  d[i] <- MAE_im
+  e[i] <- MAPE_im
+  
+}
+
+# summarizing results
+pm3 <- data_frame("changepoint_prior_scale" = a,
+                  "seasonality_prior_scale" = b,
+                  "fourier_order_yearly" = f,
+                  "holiday_prior_scale" = h,
+                  "out_of_sample_RMSE" = c,
+                  "out_of_sample_MAE" = d,
+                  "out_of_sample_MAPE" = e)
+
+# arranging rows as per best "out_of_sample_RMSE"
+(pm3 <- pm3 %>% arrange(out_of_sample_RMSE))
+
+```
+
+It can be seen that the first row of parameter values has the lowest out-of-sample (validation set) RMSE, MAE and MAPE. Thus, we go and choose those parameter values as the best parameter values for prophet model.
+
+# STAKEHOLDER COMMUNICATION
+
+At last, let us perform cross validation on the entire train (prophet train + validation) dataset and interpret the performance metrics through plots. Cross Validaion performance metrics shall be shown to the clients for the training data that they had provided.
+
+```{r, message=FALSE, warning=FALSE, fig.cap = "Performance metric MAPE from Cross Validation results over a horizon of 60 days"}
+
+changepoint_prior_scale = 0.1
+seasonality_prior_scale = 12
+fourier_order_yearly = 17
+holidays_prior_scale = 8
+
+#creating an improved prophet model
+fm <- (prophet(
+df = NULL,   # Dataframe containing the history
+growth = "linear",    # trend change/growth can't be logistic or flat for this TS
+#changepoints = c('2013-08-10','2014-01-10', '2014-08-02', '2015-01-13', '2015-07-13',	
+#'2016-01-22', '2016-08-04'), 
+n.changepoints = 40, #more than default, might overfit 
+changepoint.range = 0.80, # Proportion of history in which trend changepoints will be estimated
+yearly.seasonality = fourier_order_yearly, # best tuned value
+weekly.seasonality = FALSE, # no evidence for temp change for days of a week
+daily.seasonality = FALSE, # Daily seasonality locked as off as data is daily leveled
+holidays = NULL, # no evidence that holidays affect temp 
+seasonality.mode = "additive", # by observation
+seasonality.prior.scale = seasonality_prior_scale, # best tuned value
+holidays.prior.scale = 10, # default
+changepoint.prior.scale = changepoint_prior_scale, # best tuned value
+mcmc.samples = 0, # default
+interval.width = 0.80, #default
+uncertainty.samples = 1000, #default
+fit = TRUE
+))
+
+# adding external regressors
+fm = add_regressor(fm,'WSPM',standardize = FALSE) 
+fm = add_regressor(fm,'DEWP', standardize = FALSE) 
+fm = add_regressor(fm,'O3', standardize = FALSE) 
+fm = add_regressor(fm,'PRES', standardize = FALSE) 
+
+# fitting a prophet model on full (train + train_validation data)
+fm = fit.prophet(fm, df = train_day %>% rename(ds = date, y = TEMP_abs))
+
+# performing cross validation
+df.cv <- cross_validation(fm, initial = 365*2.4, period = 30, horizon = 60, units = "days")
+
+# plot performance metric: MAPE
+plot_cross_validation_metric(df.cv, metric = 'mape')
+
+```
+
+**INTERPRETATION** : Cross validation performance metrics can be visualized, here shown for MAPE. Dots show the absolute percent error for each prediction in df_cv. The blue line shows the MAPE, where the mean is taken over a rolling window of the dots. We see for this forecast that errors around 0.7% are typical for predictions one month into the future, and that errors increase up to around 0.9% for predictions that are a two months out.
+
+## Forecast and Inference
+
+```{r, warning= FALSE, message=FALSE, fig.cap= "Actual Temp_abs values vs Forecast values from the Prophet fit over a horizon of 60 days"}
+
+#making future dataframes
+future_fm <- make_future_dataframe(fm, periods = 60, 
+                                   freq = "day", include_history = FALSE) #predictions for two months
+
+future_fm$WSPM = prophet_test$WSPM 
+future_fm$DEWP = prophet_test$DEWP
+future_fm$O3 = prophet_test$O3
+future_fm$PRES = prophet_test$PRES
+
+# prediction
+fcst_fm <- predict(fm,future_fm) # creating forecast for 60 days
+
+#regressor coefficients 
+regressor_coefficients(fm)
+
+#visualizing forecast
+ggplot(data = tibble(fcst_fm$ds, fcst_fm$yhat, prophet_test$y), aes(x = ymd(fcst_fm$ds))) +
+  geom_path( aes(y = fcst_fm$yhat), color = "green", size = 1.2, show.legend = c("predicted")) + 
+  geom_line( aes(y = prophet_test$y), color = "orange", size = 1.2, show.legend = c("actual")) + 
+  ggtitle("Actual (orange) and Predicted (green)") +
+  xlab("Date") + ylab("TEMP_abs in Kelvin")
+  
+  
+# out of sample (test set) assessment
+RMSE_fm = sqrt(mean((prophet_test$y - fcst_fm$yhat)^2))
+MAE_fm = mean(abs( prophet_test$y - fcst_fm$yhat ))
+MAPE_fm = mean(abs(  (prophet_test$y - fcst_fm$yhat)  / prophet_test$y ))
+
+# summarizing
+tibble("RMSE" = c(round(RMSE_fm,4)), "MAE" = round(MAE_fm,4), "MAPE" = round(MAPE_fm,4))
+```
+
+From the above plot of forecast, we can see that the 

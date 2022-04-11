@@ -1,0 +1,255 @@
+---
+title: 'Binary Logistic Regression: Titanic'
+author: "Mihir"
+date: "4/4/2022"
+output:
+  rmdformats::downcute:
+   default_style: "dark"
+   downcute_theme: "default"
+   self_contained: true
+   thumbnails: false
+   lightbox: true
+   gallery: true
+   embed_fonts: true
+   use_bookdown: true
+   highlight: breezedark
+  toc: true
+  toc_float: true
+  toc_collapsed: false
+  toc_depth: 3
+  fig_caption: true
+  number_sections: true
+---
+# Abstract
+
+This study demonstrates the development of a binary logistic regression model to describe patterns of survival in passengers on the Titanic, based on passenger age, sex, ticket class, and the number of family members accompanying each passenger.
+
+# Loading Data and introduction
+```{r message=FALSE, warning=FALSE}
+# loading required libraries
+library(rms)
+library(tinytex)
+
+# get dataset from web site
+getHdata(titanic3) 
+
+# rows x columns
+dim(titanic3)
+```
+Let us look at the data dictionary for Titanic3 data.
+
+**Column** | **Description**
+------------- | -------------
+`pclass` | passanger class: levels 1st, 2nd, and 3rd
+`survived` | Survival (0 = No; 1 = Yes)
+`name` | name of the passenger
+`sex` | gender of the passenger: levels female and male
+`age` | age of the passenger in years
+`sibsp` | Number of Siblings/Spouses Aboard for a passenger
+`parch` | Number of Parents/Children Aboard for a passenger
+`ticket` | Ticket Number
+`fare` | Passenger Fare
+`cabin` | allotted cabin
+`embarked` | a factor with levels **Cherbourg**, **Queenstown**, and **Southampton**
+`boat` | Lifeboat
+`body` | Body Identification Number
+`home.dest` | Home/Destination
+
+
+# Descriptive statistics
+
+```{r message=FALSE, warning=FALSE}
+# List of names of variables to analyze
+v <- c('pclass', 'survived' , 'age' , 'sex' , 'sibsp' , 'parch')
+t3 <- titanic3[, v]
+units(t3$age) <- 'years'
+
+# univariate summaries
+describe(t3)
+```
+
+Next, we obtain access to the needed variables and observations, and save data distribution characteristics for plotting and for computing predictor effects.
+
+There are not many passengers having more than 3 siblings or spouses or more than 3 children, so we truncate two variables at 3 for the purpose of estimating stratified survival probabilities.
+
+```{r message=FALSE, warning=FALSE, fig.height= 10, fig.width=10, fig.cap= "Univariable summaries of Titanic survival"}
+# data distribution
+dd <- datadist(t3)
+# describe distributions of variables to rms
+options(datadist = 'dd')
+s <- summary(survived ~ age + sex + pclass + cut2(sibsp ,0:3) + cut2 (parch ,0:3), data = t3)
+plot(s, main = '', subtitles = FALSE)
+```
+
+**OBSERVATIONS**:
+
+1. Note the large number of missing ages.
+
+2. Also note the strong effects of sex and passenger class on the probability of surviving.
+
+3. The age effect does not appear to be very strong.
+
+4. The effects of the last two variables are unclear as the estimated proportions are not monotonic in the values of these descriptors.
+
+Although some of the cell sizes are small, we can show four-way empirical relationships with the fraction of surviving passengers by creating four cells for `sibsp` Ã `parch` combinations and by creating two age groups.
+
+```{r message=FALSE, warning=FALSE, fig.cap="Multi-way summary of Titanic survival", fig.width= 10}
+
+tn <- transform(t3 ,
+                 agec = ifelse(age < 21, 'child' , 'adult'),
+                 sibsp = ifelse(sibsp == 0, 'no sib/sp' , 'sib/sp' ),
+                 parch = ifelse(parch == 0, 'no par/child' , 'par/child'))
+
+# suppress proportions based on fewer than 25 passengers in a cell
+g <- function(y) if (length(y) < 25) NA else mean(y) 
+
+#llist , summarize in Hmisc package
+s <- with(tn , summarize(survived ,llist(agec , sex , pclass , sibsp , parch), g))
+
+#plot
+ggplot(subset(s, agec != 'NA' ), aes(x = survived , y = pclass , shape = sex)) +
+  geom_point() + facet_grid(agec ~ sibsp * parch) +
+  xlab('Proportion Surviving') + ylab('Passenger Class') +
+  scale_x_continuous(breaks = c(0, .5 , 1))
+
+```
+
+Note that none of the effects of `sibsp` or `parch` for common passenger groups appear strong on an absolute risk scale.
+
+# Exploring Trends with Nonparametric Regression
+
+The loess smoother has excellent performance when the response is binary, as long as outlier detection is turned off. Here we use a *ggplot2* add-on function *histSpikeg* in the *Hmisc* package to obtain and plot the loess fit and `age` distribution.
+
+```{r message=FALSE, warning=FALSE, fig.cap= "Nonparametric regression (loess) estimates of the relationship between age and the probability of surviving the Titanic. The top left panel shows unstratified estimates of the probability ofsurvival. Other panels show nonparametric estimates by various stratifications.", fig.width=10, fig.height=8}
+
+library(ggplot2)
+b <- scale_size_discrete (range =c(.1, .85))
+
+yl <- ylab(NULL)
+
+p1 <- ggplot(t3, aes(x = age , y = survived)) +
+  histSpikeg(survived ~ age , lowess = TRUE , data = t3) +
+  ylim(0,1) + yl
+
+p2 <- ggplot(t3 , aes(x = age, y = survived, color = sex)) +
+  histSpikeg (survived ~ age + sex, lowess = TRUE, data = t3) + 
+  ylim(0,1) + yl
+
+p3 <- ggplot(t3, aes(x = age, y = survived , size = pclass)) +
+  histSpikeg(survived ~ age + pclass, lowess =TRUE, data = t3) +
+  b + ylim(0,1) + yl
+
+p4 <- ggplot(t3, aes(x = age, y = survived, color = sex, size = pclass)) +
+  histSpikeg(survived ~ age + sex + pclass, lowess = TRUE, data = t3) +
+  b + ylim (0,1) + yl
+
+# combine 4
+gridExtra::grid.arrange(p1, p2, p3, p4, ncol = 2) 
+```
+
+The above plots shows much of the story of passenger survival patterns.
+
+1. "Women and children firstâseems to be true except for women in third class. 
+
+2. It is interesting that there is no real cutoff for who is considered a child.
+
+3. For men,the younger the greater chance of surviving. 
+
+4. The interpretation of the effects of the ânumber of relativesâ-type variables will be more difficult, as their definitions are a function of age. Let us try to plot that below:
+
+```{r message=FALSE, warning=FALSE, fig.cap="Relationship between age and survival stratified by the number of siblings or spouses on board (left panel) or by the number of parents or children of the passenger on board (right panel)."}
+top <- theme(legend.position = 'top')
+
+p1 <- ggplot(t3 , aes(x = age , y = survived , color = cut2(sibsp ,0:2))) +
+  stat_plsmo() + b + ylim(0,1) + yl + 
+  top + scale_color_discrete(name = ' siblings /spouses')
+
+p2 <- ggplot(t3, aes(x = age, y = survived, color = cut2(parch,0:2))) + 
+  stat_plsmo() + b + ylim(0,1) + yl + top + scale_color_discrete( name = 'parents/children')
+
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+# Binary Logistic Model With Casewise Deletion of Missing Values
+
+What follows is the standard analysis based on eliminating observations having any missing data.
+
+We develop an initial somewhat saturated logistic model, allowing for a flexible nonlinear age effect that can differ in shape for all **six** `sex` Ã` class `strata. 
+
+The meaning of these variables does depend on the passenger's age, so we consider only age interactions involving `sibsp` and `parch`.
+
+```{r }
+f1 <- lrm(survived ~ sex*pclass * rcs(age ,5) + rcs(age ,5)*(sibsp + parch ), data = t3) 
+anova(f1)
+```
+
+1. Three-way interactions are clearly insignificant (P = 0.4).
+
+2. So is `parch` (P = 0.6 for testing the combined main effect + interaction effects for parch, i.e., whether parch is important for any age). 
+
+The model not containing those terms is fitted below. The ^2 in the model formula means to expand the terms in parentheses to include all main effects and second-order interactions.
+
+``` {r }
+f <- lrm(survived ~ (sex + pclass + rcs(age ,5))^2 + rcs(age ,5) *sibsp , data=t3)
+# immportant stats
+f$stats
+# Wald Statistics
+anova(f)
+```
+
+1. This is a very powerful model **(ROC area = c = 0.88)**; the survival patterns are easy to detect. 
+
+2. The Wald ANOVA in the table above indicates especially strong `sex` and `pclass` effects **(Ï2 = 199 and 109, respectively)**. 
+
+3. There is a very strong `sex` x `pclass ` interaction and a strong `age ` x `sibsp` interaction, considering the strength of `sibsp` overall.
+
+# Predictor effects 
+
+Let us examine the shapes of predictor effects. With so many interactions in the model we need to obtain predicted values at least for all combinations of `sex` and `pclass`. For `sibsp` we consider only two of its possible values.
+
+```{r message=FALSE, warning=FALSE, fig.cap="Effects of predictors on probability of survival of Titanic passengers, estimated for zero siblings or spouses"}
+p <- Predict(f, age , sex , pclass , sibsp = 0, fun = plogis)
+ggplot(p)
+```
+
+Note the agreement between the lower right-hand panel of Figure 2.1 with Figure 3.1 (above). This results from our use of similar flexibility in the parametric and nonparametric approaches (and similar effective degrees of freedom).
+
+The estimated effect of `sibsp` as a function of age is shown below:
+
+```{r message=FALSE, warning=FALSE}
+ggplot(Predict(f, sibsp , age = c(10 ,15 ,20,50), conf.int = FALSE))
+```
+
+Note that children having many siblings apparently had lower survival. Married adults had slightly higher survival than unmarried ones.
+
+# Model Validation
+
+**There will never be another Titanic**, so we do not need to validate the model for prospective use. But we use the bootstrap to validate the model anyway, in an effort to detect whether it is overfitting the data. 
+
+```{r message=FALSE, warning=FALSE, fig.cap="Bootstrap overfitting-corrected loess nonparametric calibration curve for casewise deletion model"}
+
+f <- update(f, x = TRUE , y = TRUE)
+# x=TRUE , y=TRUE adds raw data to fit object so can bootstrap
+
+set.seed(131) # so can replicate re-samples
+
+validate(f, B = 200) # default = bootstrap
+
+cal <- calibrate(f, B = 200) 
+plot(cal, subtitles = FALSE )
+
+```
+
+The output of validate indicates minor overfitting. Overfitting would have been worse had the risk factors not been so strong. The closeness of the calibration curve to the 45â¦ line in Figure 12.7 demonstrates excellent validation on an absolute probability scale. But the extent of missing data casts some doubt on the validity of this model, and on the efficiency of its parameter estimates.
+
+# Survival probability for madeup cases
+
+```{r message=FALSE, warning=FALSE}
+phat <- predict(f,
+                combos <- expand.grid(age = c(2,21,50) , sex = levels(t3$sex), 
+                                      pclass = levels(t3$pclass),sibsp = 0), 
+                type = 'fitted')
+
+data.frame(combos , phat)
+
+```
