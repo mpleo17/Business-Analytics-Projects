@@ -1,5 +1,5 @@
 ---
-title: "Time Series Project"
+title: "Time Series-Prophet"
 author: "Mihir"
 date: "3/15/2022"
 output:
