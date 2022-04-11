@@ -11,5 +11,5 @@ For accessing R-codes, click on the R-Markdwon file `Binary Logistic Regression-
 
 Time Series Analysis using Prophet: 
 
-For accessing R-codes, click on the R-Markdwon file `Time Series-Prophet.Rmd.Rmd`
+For accessing R-codes, click on the R-Markdwon file `Time Series-Prophet.Rmd`
 
