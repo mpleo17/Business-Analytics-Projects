@@ -9,7 +9,7 @@ My Business Analytics Projects
 
  * For accessing R-codes, click on the R-Markdown file `Binary Logistic Regression-Titanic.Rmd`
 
-3. Time Series Analysis using Prophet: 
+3. Time Series Analysis using Prophet: *https://rpubs.com/mpleo/timeseries_prophet*
 
  * For accessing R-codes, click on the R-Markdown file `Time Series-Prophet.Rmd`
 
